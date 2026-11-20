@@ -4,9 +4,13 @@
 # ---------------------------------------------------------
 
 import json
+import math
 import os
 
 from partB.phrase_boolean import run_phrase_boolean_queries
+from partB.similarity_ranking import run_all as run_similarity_ranking
+from partB import tf_df_idf
+from partB import tfidf_normalization
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX_FILE = os.path.join(PROJECT_ROOT, "output", "positional_index.json")
@@ -124,10 +128,146 @@ def test_phrase_queries():
     report("positions 'student assessment'", results["matches_2"] == expected_2,
            "got " + str(results["matches_2"]))
 
+# ---------------------------------------------------------
+# Test 3: Raw TF, Weighted TF, DF & IDF (Member 2)
+# ---------------------------------------------------------
+
+def test_tf_df_idf():
+    print("\n--- TF, Weighted TF, DF & IDF ---")
+
+    check_number("raw_tf terms count", len(tf_df_idf.raw_tf), len(EXPECTED_INDEX))
+    check_number("weighted_tf terms count", len(tf_df_idf.weighted_tf), len(EXPECTED_INDEX))
+    check_number("df_table terms count", len(tf_df_idf.df_table), len(EXPECTED_INDEX))
+
+    N = 10
+    for term, postings in EXPECTED_INDEX.items():
+        if term not in tf_df_idf.raw_tf or term not in tf_df_idf.df_table:
+            report("tf/idf term '" + term + "'", False, "missing from Member 2 output")
+            continue
+
+        for i in range(1, 11):
+            doc = f"d{i}"
+            exp_tf = len(postings.get(doc, []))
+            exp_wtf = (1 + math.log10(exp_tf)) if exp_tf > 0 else 0.0
+
+            act_tf = tf_df_idf.raw_tf[term].get(doc, -1)
+            act_wtf = tf_df_idf.weighted_tf[term].get(doc, -1)
+
+            if act_tf != exp_tf:
+                report(f"raw_tf '{term}' in {doc}", False, f"got {act_tf}, expected {exp_tf}")
+            if abs(act_wtf - exp_wtf) > TOLERANCE:
+                report(f"weighted_tf '{term}' in {doc}", False, f"got {act_wtf}, expected {exp_wtf}")
+
+        exp_df = len(postings)
+        exp_idf = math.log10(N / exp_df) if exp_df > 0 else 0.0
+
+        act_df = tf_df_idf.df_table[term]["DF"]
+        act_idf = tf_df_idf.df_table[term]["IDF"]
+
+        check_number(f"DF '{term}'", act_df, exp_df)
+        check_number(f"IDF '{term}'", act_idf, exp_idf)
+
+# ---------------------------------------------------------
+# Test 4: TF-IDF, Document Lengths & Normalization (Member 3)
+# ---------------------------------------------------------
+
+def test_tfidf_normalization():
+    print("\n--- TF-IDF & Normalization ---")
+
+    idf_dict = {term: vals["IDF"] for term, vals in tf_df_idf.df_table.items()}
+    act_tfidf = tfidf_normalization.compute_tfidf(tf_df_idf.weighted_tf, idf_dict)
+    act_lengths = tfidf_normalization.compute_doc_lengths(act_tfidf)
+    act_norm = tfidf_normalization.compute_normalized(act_tfidf, act_lengths)
+
+    N = 10
+    docs = [f"d{i}" for i in range(1, 11)]
+    exp_tfidf = {}
+
+    for term, postings in EXPECTED_INDEX.items():
+        exp_tfidf[term] = {}
+        df = len(postings)
+        idf = math.log10(N / df) if df > 0 else 0.0
+        for doc in docs:
+            tf = len(postings.get(doc, []))
+            wtf = (1 + math.log10(tf)) if tf > 0 else 0.0
+            exp_tfidf[term][doc] = wtf * idf
+
+    exp_lengths = {
+        doc: math.sqrt(sum(exp_tfidf[t][doc] ** 2 for t in EXPECTED_INDEX))
+        for doc in docs
+    }
+
+    for doc in docs:
+        check_number(f"doc length '{doc}'", act_lengths.get(doc, -1), exp_lengths[doc])
+
+    tfidf_errors = 0
+    norm_errors = 0
+
+    for term in EXPECTED_INDEX:
+        for doc in docs:
+
+            if abs(act_tfidf[term][doc] - exp_tfidf[term][doc]) > TOLERANCE:
+                tfidf_errors += 1
+                report(
+                    f"tfidf '{term}' in {doc}",
+                    False,
+                    f"got {act_tfidf[term][doc]:.4f}, expected {exp_tfidf[term][doc]:.4f}",
+                )
+
+            exp_n = (exp_tfidf[term][doc] / exp_lengths[doc]) if exp_lengths[doc] > 0 else 0.0
+            if abs(act_norm[term][doc] - exp_n) > TOLERANCE:
+                norm_errors += 1
+                report(
+                    f"normalized '{term}' in {doc}",
+                    False,
+                    f"got {act_norm[term][doc]:.4f}, expected {exp_n:.4f}",
+                )
+
+    if tfidf_errors == 0:
+        report("all TF-IDF matrix values (280 cells)", True)
+    if norm_errors == 0:
+        report("all Normalized TF-IDF matrix values (280 cells)", True)
+
+# ---------------------------------------------------------
+# Test 5: TF-IDF, Normalization & Ranking (Members 2, 3, 5)
+# ---------------------------------------------------------
+def test_similarity_ranking():
+    print("\n--- TF-IDF & Similarity Ranking ---")
+
+    all_rankings = run_similarity_ranking(verbose=False, save=False, use_csv=True)
+
+    expected_rankings = {
+        "Phrase: online learning": [("d1", 1.0000), ("d5", 0.4476), ("d2", 0.4226), ("d9", 0.1939)],
+        "Phrase: student assessment": [("d3", 0.4226), ("d5", 0.3051), ("d8", 0.2731)],
+        "online learning AND student assessment": [("d5", 0.5322)],
+        "online learning AND NOT student assessment": [("d1", 1.0000), ("d2", 0.4226), ("d9", 0.1939)],
+    }
+
+    for query_name, expected_list in expected_rankings.items():
+        if query_name not in all_rankings:
+            report("query '" + query_name + "'", False, "missing from rankings")
+            continue
+
+        actual_list = all_rankings[query_name]
+
+        actual_docs = [doc for doc, score in actual_list]
+        expected_docs = [doc for doc, score in expected_list]
+        check_list("ranking order '" + query_name + "'", actual_docs, expected_docs)
+
+        for (act_doc, act_score), (exp_doc, exp_score) in zip(actual_list, expected_list):
+            if act_doc == exp_doc:
+                check_number(
+                    "score '" + query_name + "' -> " + exp_doc,
+                    act_score,
+                    exp_score,
+                )
 
 def main():
     test_positional_index()
     test_phrase_queries()
+    test_tf_df_idf()
+    test_tfidf_normalization()
+    test_similarity_ranking()
 
     print("\n==============================")
     print("Passed: " + str(passed) + "   Failed: " + str(failed))
