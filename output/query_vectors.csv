@@ -1,0 +1,11 @@
+﻿query,term,TF,weighted_TF,IDF,TF-IDF,normalized,query_vector_length
+Phrase: online learning,online,1,1.0,0.3979,0.3979,0.9716,0.40957
+Phrase: online learning,learning,1,1.0,0.0969,0.0969,0.2366,0.40957
+Phrase: student assessment,student,1,1.0,0.0969,0.0969,0.2366,0.40957
+Phrase: student assessment,assessment,1,1.0,0.3979,0.3979,0.9716,0.40957
+online learning AND student assessment,online,1,1.0,0.3979,0.3979,0.687,0.57922
+online learning AND student assessment,learning,1,1.0,0.0969,0.0969,0.1673,0.57922
+online learning AND student assessment,student,1,1.0,0.0969,0.0969,0.1673,0.57922
+online learning AND student assessment,assessment,1,1.0,0.3979,0.3979,0.687,0.57922
+online learning AND NOT student assessment,online,1,1.0,0.3979,0.3979,0.9716,0.40957
+online learning AND NOT student assessment,learning,1,1.0,0.0969,0.0969,0.2366,0.40957

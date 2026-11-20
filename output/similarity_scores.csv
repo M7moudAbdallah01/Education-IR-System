@@ -1,0 +1,12 @@
+﻿query,document,similarity
+Phrase: online learning,d1,1.0
+Phrase: online learning,d5,0.4476
+Phrase: online learning,d2,0.4226
+Phrase: online learning,d9,0.1939
+Phrase: student assessment,d3,0.4226
+Phrase: student assessment,d5,0.3051
+Phrase: student assessment,d8,0.2731
+online learning AND student assessment,d5,0.5322
+online learning AND NOT student assessment,d1,1.0
+online learning AND NOT student assessment,d2,0.4226
+online learning AND NOT student assessment,d9,0.1939
