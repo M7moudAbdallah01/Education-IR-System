@@ -4,7 +4,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-# colors / font
+# ---------- colors / font
 SIDEBAR, BTN, BTN_HOVER, BTN_ACTIVE = "#5E3F24", "#8B5E34", "#A8743F", "#C08A4E"
 BG, BORDER = "#F5EBDD", "#B08B63"
 DARK, SOFT = "#5E3F24", "#8B6B4A"
@@ -19,7 +19,7 @@ def fmt(x):
     return "0" if x == 0 else "{:.4f}".format(x)
 
 
-# reading the files in the output folder (nothing is calculated here)
+# ---------- reading the files in the output folder (nothing is calculated here)
 OUT = os.path.dirname(INDEX_PATH)
 
 
@@ -55,18 +55,30 @@ def load_data():
         for row in csv.DictReader(f):                          # doc_lengths.csv
             lengths[row["document"]] = float(row["vector_length"])
 
+    # query results made by partB/similarity_ranking.py
+    queries = {}
+    with open(os.path.join(OUT, "query_vectors.csv"), encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):                          # query_vectors.csv
+            q = queries.setdefault(row["query"], {"vector": [], "length": 0, "ranking": []})
+            q["vector"].append((row["term"], float(row["weighted_TF"]), float(row["TF-IDF"]),
+                                float(row["normalized"])))
+            q["length"] = float(row["query_vector_length"])
+    with open(os.path.join(OUT, "rankings.csv"), encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):                          # rankings.csv (already ranked)
+            queries[row["query"]]["ranking"].append((row["document"], float(row["similarity"])))
+
     terms = sorted(raw_tf)
     docs = sorted(lengths, key=doc_order)
-    return {"index": index, "terms": terms, "docs": docs, "N": len(docs),
+    return {"queries": queries, "index": index, "terms": terms, "docs": docs, "N": len(docs),
             "raw_tf": raw_tf, "weighted_tf": weighted_tf, "df": df, "idf": idf,
             "tfidf": tfidf, "lengths": lengths, "normalized": normalized}
 
 
-# small widgets
+# ---------- small widgets
 def setup_style(root):
     s = ttk.Style(root)
     s.theme_use("clam")
-    s.configure("Treeview", rowheight=24, font=(FONT, 10), background="white",
+    s.configure("Treeview", rowheight=22, font=(FONT, 10), background="white",
                 fieldbackground="white", foreground="#3b2a18")
     s.configure("Treeview.Heading", font=(FONT, 10, "bold"), background=BTN,
                 foreground="white", relief="flat", padding=5)
@@ -101,6 +113,6 @@ def fill(tree, rows):
 
 def title(parent, text, subtitle):
     tk.Label(parent, text=text, font=(FONT, 18, "bold"), bg=BG, fg=DARK,
-             anchor="w").pack(fill="x", padx=24, pady=(18, 0))
+             anchor="w").pack(fill="x", padx=24, pady=(14, 0))
     tk.Label(parent, text=subtitle, font=(FONT, 10), bg=BG, fg=SOFT, anchor="w",
-             wraplength=860, justify="left").pack(fill="x", padx=24, pady=(0, 8))
+             wraplength=1150, justify="left").pack(fill="x", padx=24, pady=(0, 8))

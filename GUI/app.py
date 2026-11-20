@@ -5,15 +5,17 @@ from helpers import (BG, SIDEBAR, BTN, BTN_HOVER, BTN_ACTIVE, RED, RED_HOVER, FO
                      load_data, setup_style)
 from home import home_page
 from pages import positional_page, tf_page, df_idf_page, tfidf_page, normalized_page
+from queries import phrase_page, boolean_page
+from tests_page import tests_page
 
-WIDTH, HEIGHT = 1180, 700
+WIDTH, HEIGHT = 1500, 940
 
 
 def center(win, w, h):
     """Put the window exactly in the middle of the screen (shrinks on small screens)."""
     win.update_idletasks()
     sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-    w, h = min(w, int(sw * 0.92)), min(h, int(sh * 0.88))
+    w, h = min(w, int(sw * 0.96)), min(h, int(sh * 0.92))
     win.geometry("{}x{}+{}+{}".format(w, h, (sw - w) // 2, (sh - h) // 2))
 
 
@@ -37,7 +39,7 @@ def main():
     root = tk.Tk()
     root.title("Education IR System")
     root.configure(bg=BG)
-    root.minsize(980, 600)
+    root.minsize(1000, 620)
     center(root, WIDTH, HEIGHT)
     setup_style(root)
 
@@ -55,7 +57,9 @@ def main():
 
     pages = {"Home": home_page(content, data)}
     menu = [("Positional Index", positional_page), ("TF Matrix", tf_page), ("DF & IDF", df_idf_page),
-            ("TF-IDF", tfidf_page), ("Normalized TF-IDF", normalized_page)]
+            ("TF-IDF", tfidf_page), ("Normalized TF-IDF", normalized_page),
+            ("Phrase Search", phrase_page), ("Boolean Queries", boolean_page),
+            ("Tests", tests_page)]
     for name, build in menu:
         pages[name] = build(content, data)
     for page in pages.values():

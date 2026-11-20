@@ -2,7 +2,7 @@ import tkinter as tk
 from helpers import BG, DARK, SOFT, FONT, fmt, doc_order, make_table, fill, title
 
 
-# 1. Positional Index
+# ---------------------------------------------------------------- 1. Positional Index
 def positional_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Positional Index",
@@ -37,7 +37,7 @@ def positional_page(parent, data):
     return page
 
 
-# 2. TF Matrix
+# ---------------------------------------------------------------- 2. TF Matrix
 def tf_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Term Frequency (TF)",
@@ -66,7 +66,7 @@ def tf_page(parent, data):
     return page
 
 
-# 3. DF & IDF
+# ---------------------------------------------------------------- 3. DF & IDF
 def df_idf_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Document Frequency & IDF",
@@ -78,7 +78,7 @@ def df_idf_page(parent, data):
     return page
 
 
-# 4. TF-IDF
+# ---------------------------------------------------------------- 4. TF-IDF
 def matrix_rows(data, matrix):
     return [[t] + [fmt(matrix[t][d]) for d in data["docs"]] for t in data["terms"]]
 
@@ -93,7 +93,7 @@ def tfidf_page(parent, data):
     return page
 
 
-# 5. Normalized TF-IDF
+# ---------------------------------------------------------------- 5. Normalized TF-IDF
 def normalized_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Normalized TF-IDF",
