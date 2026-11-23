@@ -174,6 +174,7 @@ def run_phrase_boolean_queries(index_path: str = DEFAULT_INDEX_PATH,
         "and_not": and_not_docs,
         "matches_1": m1,
         "matches_2": m2,
+        "phrases": (phrase_1, phrase_2),
     }
 
 
@@ -182,8 +183,14 @@ def check_against_answer_key(results: dict) -> bool:
     print("\n" + "=" * 64)
     print("CHECK AGAINST ANSWER KEY")
     print("=" * 64)
+    pair = tuple(" ".join(tokenize_phrase(p)) for p in results.get("phrases", (PHRASE_1, PHRASE_2)))
+    expected_all = ANSWER_KEYS.get(pair)
+    if expected_all is None:
+        print("  No answer key stored for these phrases - check skipped.")
+        print("  (Add an entry to ANSWER_KEYS if expected results are available.)")
+        return True
     all_ok = True
-    for key, expected in EXPECTED.items():
+    for key, expected in expected_all.items():
         ok = results[key] == expected
         all_ok &= ok
         print("  [{}] {:<8} expected {}  got {}".format(
@@ -195,6 +202,6 @@ def check_against_answer_key(results: dict) -> bool:
 
 if __name__ == "__main__":
     if len(sys.argv) == 3:
-        run_phrase_boolean_queries(phrase_1=sys.argv[1], phrase_2=sys.argv[2])
+        check_against_answer_key(run_phrase_boolean_queries(phrase_1=sys.argv[1], phrase_2=sys.argv[2]))   
     else:
         check_against_answer_key(run_phrase_boolean_queries())
