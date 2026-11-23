@@ -1,6 +1,8 @@
 # Member 4
 import json
 import os
+import re
+import sys
 from typing import Dict, Iterable, List, Set, Tuple
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +21,32 @@ EXPECTED = {
     "and_not": ["d1", "d2", "d9"],
 }
 
+ANSWER_KEYS = {
+    ("online learning", "student assessment"): EXPECTED,
+}
+
+_EDGE_PUNC = re.compile(r"^\W+|\W+$", re.UNICODE)
+
+def normalize_token(token: str) -> str:
+    return _EDGE_PUNC.sub("", token.lower())
+
+def tokenize_phrase(phrase: str) -> List[str]:
+    return [t for t in (normalize_token(w) for w in phrase.split()) if t]
+
+def normalize_index(index: dict) -> dict:
+    clean: Dict[str, Dict[str, List[int]]] = {}
+    for term, postings in index.items() :
+        key = normalize_token(term)
+        if not key:
+            continue
+        bucket = clean.setdefault(key, {})
+        for doc, positions in postings.items():
+            bucket.setdefault(doc, []).extend(positions)
+    for postings in clean.values():
+        for doc in postings:
+            postings[doc] = sorted(set(postings[doc]))
+    return clean                
+
 def doc_sort_key(doc_id: str):
     """Natural order so that d2 comes before d10 (plain string sort would not)."""
     digits = "".join(ch for ch in doc_id if ch.isdigit())
@@ -33,7 +61,7 @@ def sort_docs(docs: Iterable[str]) -> List[str]:
 def load_index(path: str = DEFAULT_INDEX_PATH) -> dict:
     """Load the positional index JSON file saved by Part A."""
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return normalize_index(json.load(f))
 
 def phrase_match(index: dict, phrase: str) -> PhraseMatches:
     """
@@ -43,7 +71,7 @@ def phrase_match(index: dict, phrase: str) -> PhraseMatches:
     Returns {doc_id: [(start_pos, end_pos), ...]} containing only matching
     documents, in natural document order.
     """
-    tokens = phrase.lower().split()
+    tokens = tokenize_phrase(phrase)
     if not tokens:
         raise ValueError("Phrase must contain at least one word.")
 
@@ -112,7 +140,9 @@ def print_boolean_result(title: str, docs: List[str]) -> None:
     print("  Matching documents: {}".format(", ".join(docs) if docs else "none"))
 
 def run_phrase_boolean_queries(index_path: str = DEFAULT_INDEX_PATH,
-                               verbose: bool = True) -> dict:
+                               verbose: bool = True,
+                               phrase_1:str = PHRASE_1,
+                               phrase_2: str = PHRASE_2) -> dict:
     """
     Run the 4 project queries. Returns:
         phrase_1 / phrase_2 : sorted matching doc lists
@@ -121,8 +151,8 @@ def run_phrase_boolean_queries(index_path: str = DEFAULT_INDEX_PATH,
     """
     index = load_index(index_path)
 
-    m1 = phrase_match(index, PHRASE_1)
-    m2 = phrase_match(index, PHRASE_2)
+    m1 = phrase_match(index, phrase_1)
+    m2 = phrase_match(index, phrase_2)
     docs1, docs2 = set(m1), set(m2)
 
     and_docs = boolean_query(docs1, docs2, "AND")
@@ -132,10 +162,10 @@ def run_phrase_boolean_queries(index_path: str = DEFAULT_INDEX_PATH,
         print("=" * 64)
         print("PART B - PHRASE QUERIES AND BOOLEAN LOGIC")
         print("=" * 64)
-        print_phrase_result(PHRASE_1, m1)
-        print_phrase_result(PHRASE_2, m2)
-        print_boolean_result('"{}" AND "{}"'.format(PHRASE_1, PHRASE_2), and_docs)
-        print_boolean_result('"{}" AND NOT "{}"'.format(PHRASE_1, PHRASE_2), and_not_docs)
+        print_phrase_result(phrase_1, m1)
+        print_phrase_result(phrase_2, m2)
+        print_boolean_result('"{}" AND "{}"'.format(phrase_1, phrase_2), and_docs)
+        print_boolean_result('"{}" AND NOT "{}"'.format(phrase_1, phrase_2), and_not_docs)
 
     return {
         "phrase_1": sort_docs(docs1),
@@ -164,4 +194,7 @@ def check_against_answer_key(results: dict) -> bool:
 
 
 if __name__ == "__main__":
-    check_against_answer_key(run_phrase_boolean_queries())
+    if len(sys.argv) == 3:
+        run_phrase_boolean_queries(phrase_1=sys.argv[1], phrase_2=sys.argv[2])
+    else:
+        check_against_answer_key(run_phrase_boolean_queries())
