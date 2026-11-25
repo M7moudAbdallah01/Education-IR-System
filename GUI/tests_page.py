@@ -1,77 +1,82 @@
-import os
 import re
 import subprocess
 import sys
+import threading
 import tkinter as tk
-
-from helpers import BG, DARK, FONT, make_table, title
-from queries import button
-
-# project root (the folder that contains test_results.py)
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GREEN, RED_TEXT = "#2E7D32", "#C62828"
-
-# test_results.py prints lines like:  "PASS  name"  or  "FAIL  name   got ..., expected ..."
-LINE = re.compile(r"^(PASS|FAIL)\s{2}(.*)$")
-
-
-def run_test_script():
-    """Run test_results.py exactly as it is and read what it prints.
-    Returns a list of (status, test name, details)."""
-    proc = subprocess.run([sys.executable, "test_results.py"], cwd=ROOT,
-                          capture_output=True, text=True, encoding="utf-8", errors="replace")
-    rows = []
-    for line in proc.stdout.splitlines():
-        m = LINE.match(line)
-        if not m:
-            continue
-        status, rest = m.groups()
-        name, _, details = rest.partition("   ")
-        rows.append((status, name.strip(), details.strip()))
-    return rows, proc
+from pathlib import Path
+from helpers import BG, DARK, FONT, make_table, fill, title
 
 
 def tests_page(parent, data):
     page = tk.Frame(parent, bg=BG)
-    title(page, "Tests", "Compares the system output with the answer key (PDF).")
+    title(page, "Tests", "The supplied answer-key tests apply only to the original Default Dataset.")
 
-    bar = tk.Frame(page, bg=BG)
-    bar.pack(fill="x", padx=24, pady=(0, 8))
-    summary = tk.Label(bar, text="Press 'Run Tests'", bg=BG, fg=DARK, font=(FONT, 11, "bold"))
-    only_failed = tk.BooleanVar(value=False)
-    state = {"rows": []}
+    is_default = data.get("is_default", not data.get("dataset_path"))
+    if not is_default:
+        tk.Label(page, text="Answer-key tests are disabled for custom datasets because "
+                            "their expected answers belong to the Default Dataset.",
+                 bg=BG, fg="#A8432F", font=(FONT, 11, "bold"), wraplength=900,
+                 justify="left").pack(anchor="w", padx=24, pady=20)
+        return page
 
-    frame, tree = make_table(page, ("Status", "Test", "Details"), (80, 380, 600))
-    tree.tag_configure("pass", foreground=GREEN)
-    tree.tag_configure("fail", foreground=RED_TEXT)
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+    project_root = Path(__file__).resolve().parent.parent
+    summary = tk.Label(page, text="Press Run Tests to execute the project test suite.",
+                       bg=BG, fg=DARK, font=(FONT, 11, "bold"), anchor="w")
+    summary.pack(anchor="w", padx=24, pady=8)
 
-    def show():
-        tree.delete(*tree.get_children())
-        for status, name, details in state["rows"]:
-            if only_failed.get() and status == "PASS":
+    table_frame, tree = make_table(page, ("Status", "Test", "Details"), (90, 360, 650))
+    table_frame.pack(fill="both", expand=True, padx=24, pady=10)
+
+    run_button = tk.Button(page, text="Run Tests", bg="#8B5E34", fg="white",
+                           activebackground="#A8743F", activeforeground="white", relief="flat",
+                           font=(FONT, 10, "bold"), cursor="hand2")
+    run_button.pack(anchor="w", padx=24)
+
+    def parse_results(stdout):
+        rows = []
+        for line in stdout.splitlines():
+            match = re.match(r"^(PASS|FAIL)\s{2}(.*)$", line)
+            if not match:
                 continue
-            tree.insert("", "end", values=(status, name, details),
-                        tags=("pass" if status == "PASS" else "fail",))
+            status, remainder = match.groups()
+            test_name, separator, details = remainder.partition("   ")
+            rows.append((status, test_name.strip(), details.strip() if separator else ""))
+        return rows
 
-    def run():
-        summary.config(text="Running...", fg=DARK)
-        page.update_idletasks()
-        rows, proc = run_test_script()
-        state["rows"] = rows
-        if not rows:       # script crashed before printing any result
-            summary.config(text="Could not run the tests (see details)", fg=RED_TEXT)
-            tree.delete(*tree.get_children())
-            tree.insert("", "end", values=("FAIL", "test_results.py", proc.stderr.strip()[-300:]),
-                        tags=("fail",))
-            return
-        failed = sum(1 for r in rows if r[0] == "FAIL")
-        summary.config(text="Passed: {}    Failed: {}".format(len(rows) - failed, failed),
-                       fg=GREEN if failed == 0 else RED_TEXT)
-        show()
+    def finish_test_run(rows, return_code, stderr):
+        fill(tree, rows)
+        passed = sum(row[0] == "PASS" for row in rows)
+        failed = sum(row[0] == "FAIL" for row in rows)
+        if rows:
+            summary.config(text=f"Passed: {passed}    Failed: {failed}",
+                           fg="#A8432F" if failed else DARK)
+        elif return_code == 0:
+            summary.config(text="The test process finished, but no PASS/FAIL lines were found.",
+                           fg=DARK)
+        else:
+            detail = stderr.strip().splitlines()
+            message = detail[-1] if detail else f"Process exit code: {return_code}"
+            summary.config(text=f"Test execution failed: {message}", fg="#A8432F")
+        run_button.config(state="normal")
 
-    button(bar, "Run Tests", run).pack(side="left")
-    tk.Checkbutton(bar, text="Show failed only", variable=only_failed, command=show,
-                   bg=BG, fg=DARK, activebackground=BG, font=(FONT, 10)).pack(side="left", padx=14)
-    summary.pack(side="left", padx=10)
+    def run_tests():
+        run_button.config(state="disabled")
+        summary.config(text="Running tests...", fg=DARK)
+        fill(tree, [])
+
+        def worker():
+            try:
+                process = subprocess.run([sys.executable, "test_results.py"], cwd=project_root,
+                                         capture_output=True, text=True, encoding="utf-8",
+                                         errors="replace", timeout=300, check=False)
+                result = (parse_results(process.stdout), process.returncode, process.stderr)
+            except subprocess.TimeoutExpired:
+                result = ([], 1, "The test process exceeded the 5-minute time limit.")
+            except Exception as error:
+                result = ([], 1, str(error))
+            page.after(0, lambda: finish_test_run(*result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    run_button.config(command=run_tests)
     return page

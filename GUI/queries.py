@@ -1,143 +1,396 @@
+import math
+import re
 import tkinter as tk
-from helpers import (BG, BTN, BTN_HOVER, BTN_ACTIVE, BORDER, DARK, SOFT, FONT, fmt, doc_order,
-                     make_table, fill, title)
 
-PHRASE_1, PHRASE_2 = "online learning", "student assessment"
-
-
-def spans(data, phrase):
-    """{doc: [(start, end)]} - where the phrase sits in each document (from the positional index)."""
-    words = phrase.split()
-    postings = [data["index"][w] for w in words]
-    result = {}
-    for doc in postings[0]:
-        found = [(s, s + len(words) - 1) for s in postings[0][doc]
-                 if all(doc in postings[i] and s + i in postings[i][doc] for i in range(1, len(words)))]
-        if found:
-            result[doc] = found
-    return result
+from helpers import (
+    BG, BTN, BTN_HOVER, BTN_ACTIVE, BORDER, DARK, SOFT, FONT,
+    fmt, doc_order, make_table, fill, title
+)
 
 
-def ranges_text(found):
-    return ", ".join("{}-{}".format(s, e) for s, e in found) if found else "-"
+PHRASE_1 = "online learning"
+PHRASE_2 = "student assessment"
 
 
-def button(parent, text, command):
-    b = tk.Button(parent, text=text, command=command, bg=BTN, fg="white", relief="flat", bd=0,
-                  activebackground=BTN_HOVER, activeforeground="white", cursor="hand2",
-                  font=(FONT, 10, "bold"), padx=14, pady=7)
-    b.normal_color = BTN
-    b.bind("<Enter>", lambda e: b.config(bg=BTN_HOVER))
-    b.bind("<Leave>", lambda e: b.config(bg=b.normal_color))
-    return b
+def tokens(text):
+    return re.findall(r"[a-z0-9]+", text.lower())
 
 
-def result_panel(parent, data, match_columns, match_widths):
-    """Summary + 3 tables + ranking line. Returns (panel, show(summary, match_rows, query_name))."""
-    panel = tk.Frame(parent, bg=BG)
-    summary = tk.Label(panel, bg=BG, fg=DARK, font=(FONT, 11, "bold"), anchor="w", justify="left",
-                       wraplength=1150)
-    summary.pack(fill="x", pady=(4, 8))
+def phrase_matches(index, phrase):
+    words = tokens(phrase)
+    if not words:
+        return {}
 
-    grid = tk.Frame(panel, bg=BG)
-    grid.pack(fill="both", expand=True)
-    grid.columnconfigure((0, 1, 2), weight=1, uniform="c")
-    grid.rowconfigure(1, weight=1)
-    blocks = [("Matching documents", match_columns, match_widths),
-              ("Query vector", ("Term", "Weighted TF", "TF-IDF", "Normalized"), (90, 90, 80, 90)),
-              ("Similarity scores", ("Rank", "Document", "Similarity"), (60, 90, 100))]
+    postings = [index.get(word, {}) for word in words]
+    if any(not posting for posting in postings):
+        return {}
+
+    common_documents = set(postings[0])
+    for posting in postings[1:]:
+        common_documents.intersection_update(posting)
+
+    matches = {}
+    for document in common_documents:
+        starts = [
+            start for start in postings[0][document]
+            if all(
+                start + offset in postings[offset].get(document, [])
+                for offset in range(1, len(words))
+            )
+        ]
+        if starts:
+            matches[document] = [
+                (start, start + len(words) - 1) for start in starts
+            ]
+    return matches
+
+
+def evaluate_query(data, query, mode):
+    query_text = query.strip()
+    if not query_text:
+        raise ValueError("Please enter a search query.")
+
+    index = data.get("index", {})
+
+    if mode == "AND NOT":
+        parts = re.split(r"\s+AND\s+NOT\s+", query_text, flags=re.IGNORECASE)
+        if len(parts) != 2 or not all(tokens(part) for part in parts):
+            raise ValueError("Enter two phrases in this format: phrase AND NOT phrase.")
+        first_matches = phrase_matches(index, parts[0])
+        second_matches = phrase_matches(index, parts[1])
+        documents = sorted(set(first_matches) - set(second_matches), key=doc_order)
+        query_terms = tokens(parts[0])
+
+    elif mode == "AND":
+        parts = re.split(r"\s+AND\s+", query_text, flags=re.IGNORECASE)
+        if len(parts) != 2 or not all(tokens(part) for part in parts):
+            raise ValueError("Enter two phrases in this format: phrase AND phrase.")
+        first_matches = phrase_matches(index, parts[0])
+        second_matches = phrase_matches(index, parts[1])
+        documents = sorted(set(first_matches).intersection(second_matches), key=doc_order)
+        query_terms = tokens(parts[0]) + tokens(parts[1])
+
+    elif mode == "Phrase":
+        matches = phrase_matches(index, query_text)
+        documents = sorted(matches, key=doc_order)
+        query_terms = tokens(query_text)
+
+    elif mode == "Term":
+        query_terms = tokens(query_text)
+        if len(query_terms) != 1:
+            raise ValueError("Term mode accepts exactly one word.")
+        postings = index.get(query_terms[0], {})
+        documents = sorted(postings, key=doc_order)
+        matches = {
+            doc: [(position, position) for position in positions]
+            for doc, positions in postings.items()
+        }
+
+    else:
+        raise ValueError(f"Unsupported search mode: {mode}")
+
+    term_counts = {}
+    for term in query_terms:
+        term_counts[term] = term_counts.get(term, 0) + 1
+
+    idf_values = data.get("idf", {})
+    query_weights = {
+        term: (1 + math.log10(freq)) * idf_values.get(term, 0)
+        for term, freq in term_counts.items()
+    }
+    query_length = math.sqrt(sum(weight * weight for weight in query_weights.values()))
+    normalized_query = {
+        term: weight / query_length if query_length else 0
+        for term, weight in query_weights.items()
+    }
+
+    normalized_matrix = data.get("normalized", {})
+    ranking = sorted(
+        (
+            (
+                doc,
+                sum(
+                    normalized_query.get(term, 0)
+                    * normalized_matrix.get(term, {}).get(doc, 0)
+                    for term in normalized_query
+                )
+            )
+            for doc in documents
+        ),
+        key=lambda item: (-item[1], doc_order(item[0]))
+    )
+
+    query_vector = [
+        (term, term_counts[term], query_weights[term], normalized_query[term])
+        for term in term_counts
+    ]
+    return documents, query_vector, query_length, ranking
+
+
+def _button(parent, text, command, active=False):
+    normal = BTN_ACTIVE if active else BTN
+    button = tk.Button(
+        parent,
+        text=text,
+        command=command,
+        bg=normal,
+        fg="white",
+        activebackground=BTN_HOVER,
+        activeforeground="white",
+        relief="flat",
+        bd=0,
+        font=(FONT, 9, "bold"),
+        padx=12,
+        pady=7,
+        cursor="hand2"
+    )
+    button.normal_color = normal
+    button.bind("<Enter>", lambda _event: button.config(bg=BTN_HOVER))
+    button.bind("<Leave>", lambda _event: button.config(bg=button.normal_color))
+    return button
+
+
+def _positions_text(found):
+    if not found:
+        return "-"
+    return ", ".join(
+        str(start) if start == end else f"{start}-{end}"
+        for start, end in found
+    )
+
+
+def _result_tables(parent, boolean=False):
+    area = tk.Frame(parent, bg=BG)
+    area.pack(fill="both", expand=True, padx=20, pady=(6, 14))
+
+    for column in range(3):
+        area.columnconfigure(column, weight=1, uniform="result_columns")
+    area.rowconfigure(1, weight=1)
+
+    match_columns = (
+        ("Document", f'"{PHRASE_1}"', f'"{PHRASE_2}"')
+        if boolean else ("Document", "Positions / ranges")
+    )
+    match_widths = (100, 150, 150) if boolean else (110, 230)
+
+    specs = [
+        ("Matching documents", match_columns, match_widths),
+        ("Query vector", ("Term", "TF", "TF-IDF", "Normalized"), (85, 55, 85, 95)),
+        ("Ranking", ("Rank", "Document", "Cosine similarity"), (55, 95, 130)),
+    ]
+
     trees = []
-    for col, (name, cols, widths) in enumerate(blocks):
-        tk.Label(grid, text=name, bg=BG, fg=SOFT, font=(FONT, 10, "bold")).grid(row=0, column=col, sticky="w", padx=4)
-        frame, tree = make_table(grid, cols, widths, height=6)
-        frame.grid(row=1, column=col, sticky="nsew", padx=4)
+    for column, (heading, columns, widths) in enumerate(specs):
+        tk.Label(
+            area, text=heading, bg=BG, fg=SOFT,
+            font=(FONT, 10, "bold"), anchor="w"
+        ).grid(row=0, column=column, sticky="w", padx=5, pady=(0, 4))
+
+        frame, tree = make_table(area, columns, widths, height=9)
+        frame.grid(row=1, column=column, sticky="nsew", padx=5)
         trees.append(tree)
 
-    length_label = tk.Label(panel, bg=BG, fg=SOFT, font=(FONT, 10), anchor="w")
-    length_label.pack(fill="x", pady=(8, 0))
-    ranking_label = tk.Label(panel, bg="white", fg=DARK, font=(FONT, 12, "bold"), anchor="w",
-                             padx=12, pady=8, highlightbackground=BORDER, highlightthickness=1)
-    ranking_label.pack(fill="x", pady=(6, 0))
-
-    def show(text, match_rows, name):
-        q = data["queries"][name]
-        summary.config(text=text)
-        fill(trees[0], match_rows)
-        fill(trees[1], [(t, fmt(w), fmt(x), fmt(n)) for t, w, x, n in q["vector"]])
-        fill(trees[2], [(i + 1, d, fmt(s)) for i, (d, s) in enumerate(q["ranking"])])
-        length_label.config(text="Query vector length = {}".format(q["length"]))
-        ranking_label.config(text="Ranking (highest similarity first):  " +
-                             " > ".join(d for d, _ in q["ranking"]))
-
-    return panel, show
+    return trees
 
 
-def query_buttons(page, label, items):
-    """Row of query buttons. items = [(button text, function)]. Highlights the chosen one."""
-    row = tk.Frame(page, bg=BG)
-    row.pack(fill="x", padx=24, pady=(0, 8))
-    tk.Label(row, text=label, bg=BG, fg=DARK, font=(FONT, 10, "bold")).pack(side="left")
-    buttons = []
+def _fill_results(data, trees, query_text, mode, summary):
+    documents, vector, query_length, ranking = evaluate_query(data, query_text, mode)
 
-    def choose(i):
-        for j, b in enumerate(buttons):
-            b.normal_color = BTN_ACTIVE if j == i else BTN
-            b.config(bg=b.normal_color)
-        items[i][1]()
+    if mode == "Phrase":
+        found = phrase_matches(data.get("index", {}), query_text)
+        rows = [
+            (doc, _positions_text(found.get(doc, [])))
+            for doc in documents
+        ]
+        fill(trees[0], rows)
 
-    for i, (text, _) in enumerate(items):
-        b = button(row, text, lambda i=i: choose(i))
-        b.pack(side="left", padx=6)
-        buttons.append(b)
-    return choose
+    else:
+        parts = re.split(
+            r"\s+AND(?:\s+NOT)?\s+",
+            query_text.strip(),
+            flags=re.IGNORECASE
+        )
+        first = phrase_matches(data.get("index", {}), parts[0])
+        second = phrase_matches(data.get("index", {}), parts[1])
+        rows = [
+            (
+                doc,
+                _positions_text(first.get(doc, [])),
+                _positions_text(second.get(doc, []))
+            )
+            for doc in documents
+        ]
+        fill(trees[0], rows)
+
+    fill(trees[1], [
+        (term, frequency, fmt(weight), fmt(normalized))
+        for term, frequency, weight, normalized in vector
+    ])
+    fill(trees[2], [
+        (rank, document, fmt(score))
+        for rank, (document, score) in enumerate(ranking, start=1)
+    ])
+
+    summary.config(
+        text=(
+            f'{len(documents)} matching document(s)  |  '
+            f'Query vector length = {fmt(query_length)}'
+        ),
+        fg=DARK
+    )
 
 
-# ---------------------------------------------------------------- Phrase Search
 def phrase_page(parent, data):
     page = tk.Frame(parent, bg=BG)
-    title(page, "Phrase Search",
-          "Exact, contiguous phrase matching using token positions, then ranking the matching documents by similarity.")
-    panel, show = result_panel(page, data, ("Document", "Start positions", "Token ranges"), (90, 110, 130))
+    title(
+        page,
+        "Phrase Search",
+        "Choose one of the assigned phrases or enter your own phrase to search."
+    )
+
+    summary = tk.Label(
+        page, text="Choose a phrase or enter a custom phrase.",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold"), anchor="w"
+    )
+    summary.pack(fill="x", padx=24, pady=(2, 8))
+
+    preset_row = tk.Frame(page, bg=BG)
+    preset_row.pack(fill="x", padx=24, pady=(0, 8))
+    tk.Label(
+        preset_row, text="Assigned phrases:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).pack(side="left", padx=(0, 8))
 
     def run(phrase):
-        found = spans(data, phrase)
-        docs = [d for d, _ in data["queries"]["Phrase: " + phrase]["ranking"]]
-        rows = [(d, ", ".join(str(s) for s, _ in found[d]), ranges_text(found[d]))
-                for d in sorted(docs, key=doc_order)]
-        show('Phrase query: "{}"  -  {} matching document(s): {}'.format(
-            phrase, len(docs), ", ".join(sorted(docs, key=doc_order))), rows, "Phrase: " + phrase)
+        try:
+            _fill_results(data, trees, phrase, "Phrase", summary)
+        except (ValueError, KeyError, TypeError) as error:
+            summary.config(text=str(error), fg="#A8432F")
+            for tree in trees:
+                fill(tree, [])
 
-    choose = query_buttons(page, "Assigned queries:",
-                           [('"{}"'.format(p), lambda p=p: run(p)) for p in (PHRASE_1, PHRASE_2)])
-    panel.pack(fill="both", expand=True, padx=24, pady=(0, 16))
-    choose(0)
+    for phrase in (PHRASE_1, PHRASE_2):
+        _button(
+            preset_row,
+            f'"{phrase}"',
+            lambda value=phrase: run(value)
+        ).pack(side="left", padx=5)
+
+    custom_row = tk.Frame(page, bg=BG)
+    custom_row.pack(fill="x", padx=24, pady=(0, 8))
+    tk.Label(
+        custom_row, text="Custom phrase:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).pack(side="left")
+
+    custom_phrase = tk.StringVar()
+    entry = tk.Entry(custom_row, textvariable=custom_phrase, font=(FONT, 11), width=42)
+    entry.pack(side="left", padx=8)
+
+    _button(
+        custom_row, "Search",
+        lambda: run(custom_phrase.get())
+    ).pack(side="left")
+
+    entry.bind("<Return>", lambda _event: run(custom_phrase.get()))
+
+    trees = _result_tables(page, boolean=False)
+    run(PHRASE_1)
     return page
 
 
-# ---------------------------------------------------------------- Boolean Queries
 def boolean_page(parent, data):
     page = tk.Frame(parent, bg=BG)
-    title(page, "Boolean Queries",
-          "AND = documents matching both phrases.   AND NOT = documents matching the first phrase but not the second.")
-    panel, show = result_panel(page, data, ("Document", '"online learning"', '"student assessment"'), (90, 130, 140))
+    title(
+        page,
+        "Boolean Queries",
+        "Run the assigned Boolean queries or enter two custom phrases and choose AND / AND NOT."
+    )
 
-    def docs_of(name):
-        return sorted((d for d, _ in data["queries"][name]["ranking"]), key=doc_order)
+    summary = tk.Label(
+        page, text="Choose an assigned query or create your own.",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold"), anchor="w"
+    )
+    summary.pack(fill="x", padx=24, pady=(2, 8))
 
-    def run(operator):
-        name = "online learning {} student assessment".format(operator)
-        result = docs_of(name)
-        m1, m2 = spans(data, PHRASE_1), spans(data, PHRASE_2)
-        rows = [(d, ranges_text(m1.get(d)), ranges_text(m2.get(d))) for d in result]
-        text = ('"{}" {} "{}"\n"{}" matches: {}   |   "{}" matches: {}   |   Result: {}'.format(
-            PHRASE_1, operator, PHRASE_2,
-            PHRASE_1, ", ".join(docs_of("Phrase: " + PHRASE_1)),
-            PHRASE_2, ", ".join(docs_of("Phrase: " + PHRASE_2)), ", ".join(result)))
-        show(text, rows, name)
+    preset_row = tk.Frame(page, bg=BG)
+    preset_row.pack(fill="x", padx=24, pady=(0, 8))
+    tk.Label(
+        preset_row, text="Assigned queries:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).pack(side="left", padx=(0, 8))
 
-    choose = query_buttons(page, "Assigned queries:",
-                           [("online learning AND student assessment", lambda: run("AND")),
-                            ("online learning AND NOT student assessment", lambda: run("AND NOT"))])
-    panel.pack(fill="both", expand=True, padx=24, pady=(0, 16))
-    choose(0)
+    def run(first_phrase, operator, second_phrase):
+        query_text = f"{first_phrase.strip()} {operator} {second_phrase.strip()}"
+        try:
+            _fill_results(data, trees, query_text, operator, summary)
+        except (ValueError, KeyError, TypeError) as error:
+            summary.config(text=str(error), fg="#A8432F")
+            for tree in trees:
+                fill(tree, [])
+
+    _button(
+        preset_row,
+        f'"{PHRASE_1}" AND "{PHRASE_2}"',
+        lambda: run(PHRASE_1, "AND", PHRASE_2)
+    ).pack(side="left", padx=5)
+
+    _button(
+        preset_row,
+        f'"{PHRASE_1}" AND NOT "{PHRASE_2}"',
+        lambda: run(PHRASE_1, "AND NOT", PHRASE_2)
+    ).pack(side="left", padx=5)
+
+    custom_box = tk.Frame(page, bg=BG)
+    custom_box.pack(fill="x", padx=24, pady=(0, 8))
+
+    tk.Label(
+        custom_box, text="First phrase:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).grid(row=0, column=0, sticky="w", padx=(0, 6), pady=3)
+
+    first_value = tk.StringVar(value=PHRASE_1)
+    first_entry = tk.Entry(custom_box, textvariable=first_value, font=(FONT, 10), width=25)
+    first_entry.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=3)
+
+    tk.Label(
+        custom_box, text="Operator:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).grid(row=0, column=2, sticky="w", padx=(0, 6), pady=3)
+
+    operator_value = tk.StringVar(value="AND")
+    operator_menu = tk.OptionMenu(custom_box, operator_value, "AND", "AND NOT")
+    operator_menu.config(
+        bg=BTN, fg="white", activebackground=BTN_HOVER,
+        activeforeground="white", relief="flat", bd=0,
+        font=(FONT, 9, "bold"), highlightthickness=0
+    )
+    operator_menu["menu"].config(font=(FONT, 9))
+    operator_menu.grid(row=0, column=3, sticky="w", padx=(0, 12), pady=3)
+
+    tk.Label(
+        custom_box, text="Second phrase:",
+        bg=BG, fg=DARK, font=(FONT, 10, "bold")
+    ).grid(row=0, column=4, sticky="w", padx=(0, 6), pady=3)
+
+    second_value = tk.StringVar(value=PHRASE_2)
+    second_entry = tk.Entry(custom_box, textvariable=second_value, font=(FONT, 10), width=25)
+    second_entry.grid(row=0, column=5, sticky="w", padx=(0, 8), pady=3)
+
+    _button(
+        custom_box, "Run Custom Query",
+        lambda: run(first_value.get(), operator_value.get(), second_value.get())
+    ).grid(row=0, column=6, sticky="w", pady=3)
+
+    first_entry.bind(
+        "<Return>",
+        lambda _event: run(first_value.get(), operator_value.get(), second_value.get())
+    )
+    second_entry.bind(
+        "<Return>",
+        lambda _event: run(first_value.get(), operator_value.get(), second_value.get())
+    )
+
+    trees = _result_tables(page, boolean=True)
+    run(PHRASE_1, "AND", PHRASE_2)
     return page

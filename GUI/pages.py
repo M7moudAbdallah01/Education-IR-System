@@ -2,113 +2,115 @@ import tkinter as tk
 from helpers import BG, DARK, SOFT, FONT, fmt, doc_order, make_table, fill, title
 
 
-# ---------------------------------------------------------------- 1. Positional Index
 def positional_page(parent, data):
     page = tk.Frame(parent, bg=BG)
-    title(page, "Positional Index",
-          "Each term with the documents it appears in and its 1-based token positions.")
+    title(page, "Positional Index", "Term → document → 1-based token positions.")
 
-    # search bar
-    bar = tk.Frame(page, bg=BG)
-    bar.pack(fill="x", padx=24, pady=(0, 8))
-    tk.Label(bar, text="Search term:", bg=BG, fg=DARK, font=(FONT, 10, "bold")).pack(side="left")
-    search = tk.StringVar()
-    tk.Entry(bar, textvariable=search, font=(FONT, 11), width=28, relief="solid", bd=1).pack(side="left", padx=8)
-    count = tk.Label(bar, text="", bg=BG, fg=SOFT, font=(FONT, 10))
-    count.pack(side="left", padx=10)
+    toolbar = tk.Frame(page, bg=BG)
+    toolbar.pack(fill="x", padx=24, pady=(0, 8))
+    tk.Label(toolbar, text="Filter term:", bg=BG, fg=DARK, font=(FONT, 10)).pack(side="left")
 
-    frame, tree = make_table(page, ("Term", "Document IDs and positions"), (170, 640))
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+    query = tk.StringVar()
+    tk.Entry(toolbar, textvariable=query, width=30, font=(FONT, 11)).pack(side="left", padx=8)
+    count_label = tk.Label(toolbar, bg=BG, fg=SOFT, font=(FONT, 9))
+    count_label.pack(side="left")
+
+    frame, tree = make_table(page, ("Term", "Document IDs and positions"), (180, 850))
+    frame.pack(fill="both", expand=True, padx=24, pady=(0, 18))
 
     def refresh(*_):
-        text = search.get().strip().lower()
+        search_text = query.get().strip().lower()
         rows = []
-        for term in data["terms"]:
-            if text in term:
-                postings = data["index"][term]
-                line = "; ".join("{}: {}".format(d, ", ".join(map(str, postings[d])))
-                                 for d in sorted(postings, key=doc_order))
-                rows.append((term, line))
+        for term in data.get("terms", []):
+            if search_text in term.lower():
+                postings = data.get("index", {}).get(term, {})
+                details = "; ".join(
+                    f"{document}: {', '.join(map(str, positions))}"
+                    for document, positions in sorted(postings.items(),
+                                                    key=lambda item: doc_order(item[0]))
+                )
+                rows.append((term, details))
         fill(tree, rows)
-        count.config(text="{} term(s)".format(len(rows)))
+        count_label.config(text=f"{len(rows)} term(s)")
 
-    search.trace_add("write", refresh)
+    query.trace_add("write", refresh)
     refresh()
     return page
 
 
-# ---------------------------------------------------------------- 2. TF Matrix
+def _matrix_page(parent, data, page_name, subtitle, matrix):
+    page = tk.Frame(parent, bg=BG)
+    title(page, page_name, subtitle)
+    documents = data.get("docs", [])
+    frame, tree = make_table(page, ["Term"] + documents, [160] + [100] * len(documents))
+    frame.pack(fill="both", expand=True, padx=24, pady=(0, 18))
+    fill(tree, [[term] + [fmt(matrix.get(term, {}).get(document, 0)) for document in documents]
+                for term in data.get("terms", [])])
+    return page
+
+
 def tf_page(parent, data):
     page = tk.Frame(parent, bg=BG)
-    title(page, "Term Frequency (TF)",
-          "Raw TF = occurrences of the term in the document.   Weighted TF = 1 + log10(TF).")
+    title(page, "Term Frequency",
+          "Raw TF counts and weighted TF = 1 + log10(TF) for TF > 0.")
 
-    docs = data["docs"]
+    toolbar = tk.Frame(page, bg=BG)
+    toolbar.pack(fill="x", padx=24, pady=(0, 4))
     mode = tk.StringVar(value="raw")
-    bar = tk.Frame(page, bg=BG)
-    bar.pack(fill="x", padx=24, pady=(0, 6))
-    for text, value in (("Raw TF", "raw"), ("Weighted TF", "weighted")):
-        tk.Radiobutton(bar, text=text, value=value, variable=mode, command=lambda: refresh(),
-                       bg=BG, fg=DARK, selectcolor="white", activebackground=BG,
-                       font=(FONT, 10, "bold")).pack(side="left", padx=(0, 16))
+    documents = data.get("docs", [])
 
-    frame, tree = make_table(page, ["Term"] + docs, [130] + [80] * len(docs))
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+    frame, tree = make_table(page, ["Term"] + documents, [160] + [100] * len(documents))
+    frame.pack(fill="both", expand=True, padx=24, pady=12)
 
     def refresh():
-        raw = mode.get() == "raw"
-        matrix = data["raw_tf"] if raw else data["weighted_tf"]
-        rows = [[t] + [str(matrix[t][d]) if raw else fmt(matrix[t][d]) for d in docs]
-                for t in data["terms"]]
-        fill(tree, rows)
+        matrix = data.get("raw_tf" if mode.get() == "raw" else "weighted_tf", {})
+        fill(tree, [[term] + [fmt(matrix.get(term, {}).get(document, 0)) for document in documents]
+                    for term in data.get("terms", [])])
+
+    for label, value in (("Raw TF", "raw"), ("Weighted TF", "weighted")):
+        tk.Radiobutton(toolbar, text=label, variable=mode, value=value, command=refresh,
+                       bg=BG, fg=DARK, activebackground=BG, font=(FONT, 10)).pack(
+            side="left", padx=(0, 12))
 
     refresh()
     return page
 
 
-# ---------------------------------------------------------------- 3. DF & IDF
 def df_idf_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Document Frequency & IDF",
-          "DF = number of documents containing the term.   IDF = log10(N / DF),  N = {}.".format(data["N"]))
-
-    frame, tree = make_table(page, ("Term", "DF", "IDF = log10(N / DF)"), (220, 120, 240))
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
-    fill(tree, [(t, data["df"][t], fmt(data["idf"][t])) for t in data["terms"]])
+          f"DF = number of documents containing the term; IDF = log10(N / DF), N = {data.get('N', 0)}.")
+    frame, tree = make_table(page, ("Term", "DF", "IDF"), (300, 150, 220))
+    frame.pack(fill="both", expand=True, padx=24, pady=15)
+    fill(tree, [(term, data.get("df", {}).get(term, 0), fmt(data.get("idf", {}).get(term, 0)))
+                for term in data.get("terms", [])])
     return page
-
-
-# ---------------------------------------------------------------- 4. TF-IDF
-def matrix_rows(data, matrix):
-    return [[t] + [fmt(matrix[t][d]) for d in data["docs"]] for t in data["terms"]]
 
 
 def tfidf_page(parent, data):
-    page = tk.Frame(parent, bg=BG)
-    title(page, "TF-IDF Matrix", "TF-IDF = Weighted TF x IDF.")
-    docs = data["docs"]
-    frame, tree = make_table(page, ["Term"] + docs, [130] + [80] * len(docs))
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 20))
-    fill(tree, matrix_rows(data, data["tfidf"]))
-    return page
+    return _matrix_page(parent, data, "TF-IDF Matrix", "TF-IDF = Weighted TF × IDF.",
+                        data.get("tfidf", {}))
 
 
-# ---------------------------------------------------------------- 5. Normalized TF-IDF
 def normalized_page(parent, data):
     page = tk.Frame(parent, bg=BG)
     title(page, "Normalized TF-IDF",
-          "Each TF-IDF weight divided by its document vector length (L2 norm).")
-    docs = data["docs"]
-    widths = [130] + [80] * len(docs)
+          "Each TF-IDF weight is divided by the L2 length of its document vector.")
 
-    # document vector lengths (small table at the bottom)
-    tk.Label(page, text="Document vector lengths", bg=BG, fg=SOFT,
-             font=(FONT, 10, "bold")).pack(side="bottom", anchor="w", padx=24)
-    lframe, ltree = make_table(page, ["Document"] + docs, [130] + [80] * len(docs), height=1)
-    lframe.pack(side="bottom", fill="x", padx=24, pady=(2, 16))
-    fill(ltree, [["Length"] + ["{:.4f}".format(data["lengths"][d]) for d in docs]])
+    documents = data.get("docs", [])
+    matrix = data.get("normalized", {})
+    frame, tree = make_table(page, ["Term"] + documents, [160] + [100] * len(documents))
+    frame.pack(fill="both", expand=True, padx=24, pady=(8, 5))
+    fill(tree, [[term] + [fmt(matrix.get(term, {}).get(document, 0)) for document in documents]
+                for term in data.get("terms", [])])
 
-    frame, tree = make_table(page, ["Term"] + docs, widths)
-    frame.pack(fill="both", expand=True, padx=24, pady=(0, 10))
-    fill(tree, matrix_rows(data, data["normalized"]))
+    tk.Label(page, text="Document vector lengths", bg=BG, fg=DARK,
+             font=(FONT, 10, "bold")).pack(anchor="w", padx=24)
+
+    table_height = max(1, min(5, len(documents)))
+    lengths_frame, lengths_tree = make_table(page, ["Document", "Vector length"],
+                                             [260, 200], height=table_height)
+    lengths_frame.pack(fill="x", padx=24, pady=(4, 15))
+    fill(lengths_tree, [(document, fmt(data.get("lengths", {}).get(document, 0)))
+                        for document in documents])
     return page
